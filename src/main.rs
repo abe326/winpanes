@@ -1,6 +1,10 @@
+#[cfg(windows)]
+mod appmsg;
 mod config;
 mod dock;
 mod layout;
+#[cfg(windows)]
+mod win_util;
 
 #[cfg(windows)]
 fn main() {
