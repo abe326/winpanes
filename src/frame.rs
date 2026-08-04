@@ -290,6 +290,15 @@ unsafe extern "system" fn frame_wndproc(
             raise_group(hwnd);
             LRESULT(MA_NOACTIVATE as isize)
         }
+        // タスクバーのボタン・Alt+Tab 等システム経由のアクティブ化。
+        // クリックは WM_MOUSEACTIVATE で抑止しているためここには来ない。
+        // 他のウィンドウ同様、グループ(ドック済み+フレーム)ごと前面へ出す
+        WM_ACTIVATE => {
+            if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
+                raise_group(hwnd);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         // フレームがZオーダー上で引き上げられる場合、行き先を
         // 「ドック済みウィンドウ群の直下」へ書き換えて前へ出ることを事前に阻止する。
         // 自ウィンドウの変更は同一スレッドで同期的に確定するため競合しない
@@ -782,6 +791,11 @@ pub fn set_preset(hwnd: HWND, p: Preset) {
 
 /// パネル再計算 + ドック済みウィンドウの一括再配置 + 再描画
 pub fn reflow(hwnd: HWND) {
+    // 最小化中は再配置しない(アイコン化座標基準でドック済みウィンドウを飛ばさない。
+    // 復帰時の WM_SIZE で改めて再配置される)
+    if unsafe { IsIconic(hwnd) }.as_bool() {
+        return;
+    }
     let targets =
         with_frame_ret(hwnd, |f| f.dock.target_rects(&panels_screen(f), screen_body_rect(f)));
     let dragging = APP.with(|a| a.borrow().dragging.as_ref().map(|d| d.target));
