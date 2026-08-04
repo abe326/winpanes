@@ -8,6 +8,8 @@ mod dock;
 mod frame;
 mod layout;
 #[cfg(windows)]
+mod overlay;
+#[cfg(windows)]
 mod win_util;
 
 #[cfg(windows)]
