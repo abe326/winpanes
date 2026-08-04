@@ -265,19 +265,25 @@ unsafe extern "system" fn frame_wndproc(
             toggle_tool_maximize(hwnd);
             LRESULT(0)
         }
+        // フレームはアクティブ化しない。アクティブ化の既定動作(最前面への引き上げ)が
+        // ドック済みウィンドウを覆う原因のため、根元から断つ。
+        // ボタン・ドラッグ移動・リサイズはアクティブ化なしで動作する
         WM_MOUSEACTIVATE => {
             raise_group(hwnd);
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            LRESULT(MA_NOACTIVATE as isize)
         }
-        // フレームのZオーダーが変わるたび(アクティブ化の引き上げ含む)、
-        // ドック済みウィンドウをフレームの上へ積み直す。
-        // これで「フレームは常にドック済みウィンドウの直下」が誰が引き上げても保たれる
-        WM_WINDOWPOSCHANGED => {
-            let wp = unsafe { &*(lparam.0 as *const WINDOWPOS) };
+        // フレームがZオーダー上で引き上げられる場合、行き先を
+        // 「ドック済みウィンドウ群の直下」へ書き換えて前へ出ることを事前に阻止する。
+        // 自ウィンドウの変更は同一スレッドで同期的に確定するため競合しない
+        // (他プロセスのウィンドウを事後に積み直す方式は SetWindowPos の
+        //  非同期ポストによりアクティブ化処理との競合に負ける)
+        WM_WINDOWPOSCHANGING => {
+            let wp = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
             if !wp.flags.contains(SWP_NOZORDER) {
-                raise_docked_above(hwnd);
+                if let Some(bottom) = bottom_docked(hwnd) {
+                    wp.hwndInsertAfter = bottom;
+                }
             }
-            // DefWindowProc が WM_SIZE / WM_MOVE を生成する(reflow はそちらで走る)
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         // 移動・リサイズ中のリアルタイム追従(仕様4)
@@ -756,33 +762,11 @@ pub fn reflow(hwnd: HWND) {
 }
 
 /// 仕様4: フレームとドック済みウィンドウをグループとして手前へ。フレームは常に最背面。
-/// フレームを引き上げると WM_WINDOWPOSCHANGED 経由で raise_docked_above が
-/// ドック済みウィンドウをその上へ積み直す
+/// 先にドック済みを前面へ出し、フレーム自身の引き上げは WM_WINDOWPOSCHANGING の
+/// 書き換えによって「ドック済みの直下」に収まる
 pub fn raise_group(hwnd: HWND) {
     APP.with(|a| a.borrow_mut().last_active = hwnd);
-    unsafe {
-        let _ = SetWindowPos(
-            hwnd,
-            Some(HWND_TOP),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-        );
-    }
-}
-
-/// フレームのZオーダー変更直後に呼ぶ。ドック済みウィンドウをフレームの上へ積み直す
-fn raise_docked_above(hwnd: HWND) {
-    let ids = with_frame_ret(hwnd, |f| {
-        f.dock
-            .target_rects(&panels_screen(f), screen_body_rect(f))
-            .iter()
-            .map(|(id, _)| *id)
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default();
+    let ids = docked_ids(hwnd);
     unsafe {
         for id in ids {
             let _ = SetWindowPos(
@@ -795,7 +779,47 @@ fn raise_docked_above(hwnd: HWND) {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
         }
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOP),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
+}
+
+/// このフレームにドック済みのウィンドウID一覧
+fn docked_ids(hwnd: HWND) -> Vec<isize> {
+    with_frame_ret(hwnd, |f| {
+        (0..f.dock.panel_count()).filter_map(|i| f.dock.occupant(i)).collect()
+    })
+    .unwrap_or_default()
+}
+
+/// このフレームのドック済みウィンドウのうち、Zオーダーが最も背面のものを返す。
+/// デスクトップのトップレベルウィンドウを上から走査して最後に見つかったものが最背面
+fn bottom_docked(hwnd: HWND) -> Option<HWND> {
+    let ids = docked_ids(hwnd);
+    if ids.is_empty() {
+        return None;
+    }
+    let mut bottom = None;
+    unsafe {
+        let mut w = GetTopWindow(None).ok()?;
+        while !w.is_invalid() {
+            if ids.contains(&(w.0 as isize)) {
+                bottom = Some(w);
+            }
+            match GetWindow(w, GW_HWNDNEXT) {
+                Ok(next) => w = next,
+                Err(_) => break,
+            }
+        }
+    }
+    bottom
 }
 
 /// 仕様6: 閉じるはそのフレームのみ。ドック済みは元の位置・サイズへ復元
