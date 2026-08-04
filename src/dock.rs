@@ -16,16 +16,23 @@ pub enum DockResult<Id> {
     Swapped { from: usize, other: Id },
     /// 新規ウィンドウが占有パネルへ → 先住は解除(呼び出し側で orig へ復元すること)
     Replaced { freed: Docked<Id> },
+    /// ロック中パネルが絡むため拒否(状態は一切変えない)
+    Rejected,
 }
 
 pub struct DockManager<Id> {
     slots: Vec<Option<Docked<Id>>>,
     maximized: Option<usize>,
+    locked: Vec<bool>,
 }
 
 impl<Id: Copy + Eq> DockManager<Id> {
     pub fn new(panel_count: usize) -> Self {
-        Self { slots: (0..panel_count).map(|_| None).collect(), maximized: None }
+        Self {
+            slots: (0..panel_count).map(|_| None).collect(),
+            maximized: None,
+            locked: vec![false; panel_count],
+        }
     }
 
     pub fn panel_count(&self) -> usize {
@@ -44,8 +51,26 @@ impl<Id: Copy + Eq> DockManager<Id> {
         self.maximized
     }
 
-    /// ドック操作。最大化中に呼ばれた場合は最大化を解除してから適用する(仕様4)
+    pub fn is_locked(&self, panel: usize) -> bool {
+        self.locked.get(panel).copied().unwrap_or(false)
+    }
+
+    /// パネルのロックをトグルし、新しい状態を返す
+    pub fn toggle_lock(&mut self, panel: usize) -> bool {
+        if let Some(l) = self.locked.get_mut(panel) {
+            *l = !*l;
+            *l
+        } else {
+            false
+        }
+    }
+
+    /// ドック操作。最大化中に呼ばれた場合は最大化を解除してから適用する(仕様4)。
+    /// ロック中パネルが絡む場合は Rejected を返し、状態を一切変えない
     pub fn dock(&mut self, id: Id, panel: usize, orig: Rect) -> DockResult<Id> {
+        if self.is_locked(panel) || self.panel_of(id).is_some_and(|p| self.is_locked(p)) {
+            return DockResult::Rejected;
+        }
         self.maximized = None;
         match self.panel_of(id) {
             Some(from) if from == panel => DockResult::Moved { from },
@@ -103,6 +128,7 @@ impl<Id: Copy + Eq> DockManager<Id> {
     /// プリセット変更でパネル数が変わる。あふれた分を解放して返す(仕様4)
     pub fn set_panel_count(&mut self, n: usize) -> Vec<Docked<Id>> {
         self.maximized = None;
+        self.locked.resize(n, false);
         if n < self.slots.len() {
             self.slots.drain(n..).flatten().collect()
         } else {
@@ -275,5 +301,100 @@ mod tests {
         let t = m.target_rects(&panels, frame_body);
         assert!(t.contains(&(20, frame_body)));
         assert!(t.contains(&(10, panels[0].body)));
+    }
+
+    // ------------------------------------------------------------ ロック
+
+    #[test]
+    fn locked_panel_rejects_outside_drop() {
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.toggle_lock(0);
+        assert_eq!(m.dock(20u32, 0, R2), DockResult::Rejected);
+        assert_eq!(m.occupant(0), Some(10)); // 先住は不変
+        assert_eq!(m.panel_of(20), None);
+    }
+
+    #[test]
+    fn locked_panel_rejects_swap() {
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.dock(20u32, 1, R2);
+        m.toggle_lock(1);
+        assert_eq!(m.dock(10u32, 1, R1), DockResult::Rejected);
+        assert_eq!(m.occupant(0), Some(10));
+        assert_eq!(m.occupant(1), Some(20));
+    }
+
+    #[test]
+    fn locked_source_panel_rejects_move_out() {
+        // 完全ロック: ロック中パネルの占有者は他パネルへも動かせない
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.toggle_lock(0);
+        assert_eq!(m.dock(10u32, 2, R1), DockResult::Rejected);
+        assert_eq!(m.occupant(0), Some(10));
+        assert_eq!(m.occupant(2), None);
+    }
+
+    #[test]
+    fn locked_empty_panel_rejects_dock() {
+        let mut m = DockManager::new(4);
+        m.toggle_lock(3);
+        assert_eq!(m.dock(10u32, 3, R1), DockResult::Rejected);
+        assert_eq!(m.occupant(3), None);
+    }
+
+    #[test]
+    fn toggle_lock_toggles_and_reports() {
+        let mut m = DockManager::<u32>::new(2);
+        assert!(!m.is_locked(0));
+        assert!(m.toggle_lock(0));
+        assert!(m.is_locked(0));
+        assert!(!m.toggle_lock(0));
+        assert!(!m.is_locked(0));
+    }
+
+    #[test]
+    fn lock_does_not_block_maximize() {
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.toggle_lock(0);
+        assert_eq!(m.toggle_maximize(0), Some(true));
+        assert_eq!(m.maximized_panel(), Some(0));
+        assert_eq!(m.toggle_maximize(0), Some(false));
+    }
+
+    #[test]
+    fn rejected_dock_keeps_maximize() {
+        // 拒否時は「dock は最大化を解除してから適用」も発動しない
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.toggle_lock(1);
+        m.toggle_maximize(0);
+        assert_eq!(m.dock(20u32, 1, R2), DockResult::Rejected);
+        assert_eq!(m.maximized_panel(), Some(0));
+    }
+
+    #[test]
+    fn panel_count_change_resizes_locks() {
+        let mut m = DockManager::<u32>::new(4);
+        m.toggle_lock(1);
+        m.toggle_lock(3);
+        m.set_panel_count(2);
+        assert!(m.is_locked(1)); // 残るパネルのロックは維持
+        assert!(!m.is_locked(3)); // あふれたロックは破棄(範囲外は false)
+        m.set_panel_count(4);
+        assert!(!m.is_locked(3)); // 拡大分は非ロック
+    }
+
+    #[test]
+    fn undock_succeeds_even_when_locked() {
+        // destroy・仕様8 の除去経路の保証: undock はロックを見ない
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.toggle_lock(0);
+        assert_eq!(m.undock(10), Some(R1));
+        assert!(m.is_locked(0)); // ロックはパネル属性として残る
     }
 }
