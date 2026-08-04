@@ -269,6 +269,14 @@ unsafe extern "system" fn frame_wndproc(
             raise_group(hwnd);
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
+        // アクティブ化の既定動作はフレームを最前面へ引き上げるため、
+        // その後に積み直さないとフレームがドック済みウィンドウを覆ってしまう
+        WM_ACTIVATE => {
+            if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
+                raise_group(hwnd);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         // 移動・リサイズ中のリアルタイム追従(仕様4)
         WM_MOVING | WM_SIZING => {
             reflow(hwnd);
