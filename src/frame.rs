@@ -21,6 +21,9 @@ pub enum ButtonId {
     ToolMax,
     ToolClose,
     PanelMax(usize),
+    /// パネル最大化中のみツールバーに出る復帰ボタン
+    /// (最大化ウィンドウがパネルヘッダーを覆い、ヘッダー上のボタンが押せなくなるため)
+    PanelRestore,
 }
 
 pub struct FrameState {
@@ -192,6 +195,9 @@ pub fn button_rects(state: &FrameState) -> Vec<(ButtonId, Rect)> {
         (ButtonId::ToolClose, Rect { x: c.w - bw, y: 0, w: bw, h: tb }),
         (ButtonId::ToolMax, Rect { x: c.w - bw * 2, y: 0, w: bw, h: tb }),
     ];
+    if state.dock.maximized_panel().is_some() {
+        v.push((ButtonId::PanelRestore, Rect { x: c.w - bw * 3, y: 0, w: bw, h: tb }));
+    }
     for (i, p) in [Preset::Grid2x2, Preset::Cols2, Preset::Rows2].into_iter().enumerate() {
         v.push((
             ButtonId::Preset(p),
@@ -589,6 +595,15 @@ fn draw_frame(dc: HDC, client: Rect, f: &FrameState, theme: &Theme) {
                 let g = if f.maximized { GLYPH_RESTORE } else { GLYPH_MAXIMIZE };
                 draw_glyph(dc, r, g, theme.text);
             }
+            ButtonId::PanelRestore => {
+                if hovered {
+                    fill(dc, r, theme.hover);
+                }
+                unsafe {
+                    SelectObject(dc, icon_font.into());
+                }
+                draw_glyph(dc, r, GLYPH_RESTORE, theme.accent);
+            }
             ButtonId::PanelMax(i) => {
                 if f.dock.occupant(i).is_none() {
                     continue; // 空パネルにはボタンを出さない
@@ -647,6 +662,11 @@ fn on_click(hwnd: HWND, lparam: LPARAM) {
         Some(ButtonId::ToolMax) => toggle_tool_maximize(hwnd),
         Some(ButtonId::Preset(p)) => set_preset(hwnd, p),
         Some(ButtonId::PanelMax(i)) => toggle_panel_maximize(hwnd, i),
+        Some(ButtonId::PanelRestore) => {
+            if let Some(p) = with_frame_ret(hwnd, |f| f.dock.maximized_panel()).flatten() {
+                toggle_panel_maximize(hwnd, p);
+            }
+        }
         None => {}
     }
 }
