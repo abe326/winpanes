@@ -24,6 +24,8 @@ pub enum ButtonId {
     /// パネル最大化中のみツールバーに出る復帰ボタン
     /// (最大化ウィンドウがパネルヘッダーを覆い、ヘッダー上のボタンが押せなくなるため)
     PanelRestore,
+    /// パネルヘッダーの鍵ボタン。ロック中はD&Dで中身が変わらない
+    PanelLock(usize),
 }
 
 pub struct FrameState {
@@ -205,13 +207,22 @@ pub fn button_rects(state: &FrameState) -> Vec<(ButtonId, Rect)> {
             Rect { x: dpi_scale(hwnd, 8) + pw * i as i32, y: 0, w: pw, h: tb },
         ));
     }
-    // パネルヘッダー右端の最大化ボタン
+    // パネルヘッダー右端のボタン(右から: 最大化、鍵)
     let hb = dpi_scale(hwnd, 40);
     for (i, panel) in panels_client(state).iter().enumerate() {
         v.push((
             ButtonId::PanelMax(i),
             Rect {
                 x: panel.header.x + panel.header.w - hb,
+                y: panel.header.y,
+                w: hb,
+                h: panel.header.h,
+            },
+        ));
+        v.push((
+            ButtonId::PanelLock(i),
+            Rect {
+                x: panel.header.x + panel.header.w - hb * 2,
                 y: panel.header.y,
                 w: hb,
                 h: panel.header.h,
@@ -383,6 +394,8 @@ fn hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
 const GLYPH_MAXIMIZE: u16 = 0xE922;
 const GLYPH_RESTORE: u16 = 0xE923;
 const GLYPH_CLOSE: u16 = 0xE8BB;
+const GLYPH_LOCK: u16 = 0xE72E;
+const GLYPH_UNLOCK: u16 = 0xE785;
 
 fn create_font(hwnd: HWND, face: PCWSTR, logical_h: i32) -> HFONT {
     unsafe {
@@ -518,7 +531,7 @@ fn draw_frame(dc: HDC, client: Rect, f: &FrameState, theme: &Theme) {
             theme.border,
         );
         let pad = dpi_scale(hwnd, 10);
-        let btn_w = dpi_scale(hwnd, 40);
+        let btn_w = dpi_scale(hwnd, 40) * 2; // 鍵 + 最大化ボタンの分
         let title_rect = Rect {
             x: p.header.x + pad,
             y: p.header.y,
@@ -619,6 +632,20 @@ fn draw_frame(dc: HDC, client: Rect, f: &FrameState, theme: &Theme) {
                     if f.dock.maximized_panel() == Some(i) { GLYPH_RESTORE } else { GLYPH_MAXIMIZE };
                 draw_glyph(dc, r, g, theme.text_dim);
             }
+            ButtonId::PanelLock(i) => {
+                // 空パネルでも表示(空パネルロック=予約席として機能)
+                if hovered {
+                    fill(dc, r, theme.hover);
+                }
+                unsafe {
+                    SelectObject(dc, icon_font.into());
+                }
+                if f.dock.is_locked(i) {
+                    draw_glyph(dc, r, GLYPH_LOCK, theme.accent);
+                } else {
+                    draw_glyph(dc, r, GLYPH_UNLOCK, theme.text_dim);
+                }
+            }
         }
     }
 
@@ -668,6 +695,7 @@ fn on_click(hwnd: HWND, lparam: LPARAM) {
                 toggle_panel_maximize(hwnd, p);
             }
         }
+        Some(ButtonId::PanelLock(i)) => toggle_panel_lock(hwnd, i),
         None => {}
     }
 }
@@ -724,6 +752,16 @@ pub fn toggle_panel_maximize(hwnd: HWND, panel: usize) {
         }
     }
     reflow(hwnd);
+}
+
+/// パネルのロックをトグルする。ドック内容は変えないため再描画のみ
+pub fn toggle_panel_lock(hwnd: HWND, panel: usize) {
+    with_frame(hwnd, |f| {
+        f.dock.toggle_lock(panel);
+    });
+    unsafe {
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
 }
 
 pub fn set_preset(hwnd: HWND, p: Preset) {
