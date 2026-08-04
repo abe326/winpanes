@@ -269,12 +269,15 @@ unsafe extern "system" fn frame_wndproc(
             raise_group(hwnd);
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
-        // アクティブ化の既定動作はフレームを最前面へ引き上げるため、
-        // その後に積み直さないとフレームがドック済みウィンドウを覆ってしまう
-        WM_ACTIVATE => {
-            if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
-                raise_group(hwnd);
+        // フレームのZオーダーが変わるたび(アクティブ化の引き上げ含む)、
+        // ドック済みウィンドウをフレームの上へ積み直す。
+        // これで「フレームは常にドック済みウィンドウの直下」が誰が引き上げても保たれる
+        WM_WINDOWPOSCHANGED => {
+            let wp = unsafe { &*(lparam.0 as *const WINDOWPOS) };
+            if !wp.flags.contains(SWP_NOZORDER) {
+                raise_docked_above(hwnd);
             }
+            // DefWindowProc が WM_SIZE / WM_MOVE を生成する(reflow はそちらで走る)
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         // 移動・リサイズ中のリアルタイム追従(仕様4)
@@ -752,17 +755,11 @@ pub fn reflow(hwnd: HWND) {
     }
 }
 
-/// 仕様4: フレームとドック済みウィンドウをグループとして手前へ。フレームは常に最背面
+/// 仕様4: フレームとドック済みウィンドウをグループとして手前へ。フレームは常に最背面。
+/// フレームを引き上げると WM_WINDOWPOSCHANGED 経由で raise_docked_above が
+/// ドック済みウィンドウをその上へ積み直す
 pub fn raise_group(hwnd: HWND) {
     APP.with(|a| a.borrow_mut().last_active = hwnd);
-    let ids = with_frame_ret(hwnd, |f| {
-        f.dock
-            .target_rects(&panels_screen(f), screen_body_rect(f))
-            .iter()
-            .map(|(id, _)| *id)
-            .collect::<Vec<_>>()
-    })
-    .unwrap_or_default();
     unsafe {
         let _ = SetWindowPos(
             hwnd,
@@ -773,6 +770,20 @@ pub fn raise_group(hwnd: HWND) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
         );
+    }
+}
+
+/// フレームのZオーダー変更直後に呼ぶ。ドック済みウィンドウをフレームの上へ積み直す
+fn raise_docked_above(hwnd: HWND) {
+    let ids = with_frame_ret(hwnd, |f| {
+        f.dock
+            .target_rects(&panels_screen(f), screen_body_rect(f))
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    unsafe {
         for id in ids {
             let _ = SetWindowPos(
                 HWND(id as *mut _),
