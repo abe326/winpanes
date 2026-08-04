@@ -12,6 +12,8 @@ mod layout;
 #[cfg(windows)]
 mod overlay;
 #[cfg(windows)]
+mod tray;
+#[cfg(windows)]
 mod win_util;
 
 #[cfg(windows)]
@@ -27,10 +29,72 @@ unsafe extern "system" fn app_wndproc(
 ) -> LRESULT {
     use windows::Win32::UI::WindowsAndMessaging::DefWindowProcW;
 
+    use windows::Win32::UI::WindowsAndMessaging::{WM_COMMAND, WM_CONTEXTMENU, WM_RBUTTONUP};
+
     if drag::handle_app_message(hwnd, msg, wparam) {
         return LRESULT(0);
     }
+    if msg == appmsg::WM_APP_TRAY {
+        let ev = (lparam.0 as u32) & 0xFFFF;
+        if ev == WM_RBUTTONUP || ev == WM_CONTEXTMENU {
+            tray::show_menu(hwnd);
+        }
+        return LRESULT(0);
+    }
+    if msg == WM_COMMAND {
+        on_tray_command(hwnd, wparam.0 & 0xFFFF);
+        return LRESULT(0);
+    }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+#[cfg(windows)]
+fn on_tray_command(app_hwnd: HWND, cmd: usize) {
+    match cmd {
+        tray::CMD_NEW_FRAME => {
+            frame::create(&config::FrameConfig::default());
+            save_config();
+        }
+        tray::CMD_QUIT => quit_app(app_hwnd),
+        c if c > tray::CMD_PRESET_BASE && c <= tray::CMD_PRESET_BASE + 3 => {
+            let p = match c - tray::CMD_PRESET_BASE {
+                1 => layout::Preset::Grid2x2,
+                2 => layout::Preset::Cols2,
+                _ => layout::Preset::Rows2,
+            };
+            // 最後に操作したフレーム。まだ無ければ先頭のフレーム
+            let target = frame::APP.with(|a| {
+                let app = a.borrow();
+                let last = app.last_active;
+                if app.frames.iter().any(|f| f.hwnd == last) {
+                    Some(last)
+                } else {
+                    app.frames.first().map(|f| f.hwnd)
+                }
+            });
+            if let Some(h) = target {
+                frame::set_preset(h, p);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 仕様4: 終了時は全ドック済みウィンドウを元の位置・サイズへ戻してから抜ける
+#[cfg(windows)]
+fn quit_app(app_hwnd: HWND) {
+    use windows::Win32::UI::WindowsAndMessaging::PostQuitMessage;
+
+    save_config(); // フレームを畳む前に現在の状態を保存する
+    frame::APP.with(|a| a.borrow_mut().suppress_save = true);
+    let hwnds: Vec<_> = frame::APP.with(|a| a.borrow().frames.iter().map(|f| f.hwnd).collect());
+    for h in hwnds {
+        frame::close_frame(h);
+    }
+    tray::remove(app_hwnd);
+    unsafe {
+        PostQuitMessage(0);
+    }
 }
 
 #[cfg(windows)]
@@ -73,6 +137,7 @@ fn main() {
             app.overlay = overlay;
         });
         drag::install_hooks(app_hwnd);
+        tray::add(app_hwnd);
     }
 
     let cfg = config::load(&config::config_path());

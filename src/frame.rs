@@ -43,6 +43,10 @@ pub struct App {
     pub app_hwnd: HWND,
     pub overlay: HWND,
     pub dragging: Option<DragCtx>,
+    /// 最後に操作されたフレーム。トレイメニューのプリセット切替の適用先
+    pub last_active: HWND,
+    /// 終了処理中は保存を止める(フレームを畳む過程で設定を空にしないため)
+    pub suppress_save: bool,
 }
 
 thread_local! {
@@ -52,6 +56,8 @@ thread_local! {
         app_hwnd: HWND::default(),
         overlay: HWND::default(),
         dragging: None,
+        last_active: HWND::default(),
+        suppress_save: false,
     });
 
     static SAVE_HOOK: RefCell<Option<fn()>> = const { RefCell::new(None) };
@@ -63,6 +69,9 @@ pub fn set_save_hook(f: fn()) {
 }
 
 pub fn request_save() {
+    if APP.with(|a| a.borrow().suppress_save) {
+        return;
+    }
     let f = SAVE_HOOK.with(|h| *h.borrow());
     if let Some(f) = f {
         f();
@@ -737,6 +746,7 @@ pub fn reflow(hwnd: HWND) {
 
 /// 仕様4: フレームとドック済みウィンドウをグループとして手前へ。フレームは常に最背面
 pub fn raise_group(hwnd: HWND) {
+    APP.with(|a| a.borrow_mut().last_active = hwnd);
     let ids = with_frame_ret(hwnd, |f| {
         f.dock
             .target_rects(&panels_screen(f), screen_body_rect(f))
