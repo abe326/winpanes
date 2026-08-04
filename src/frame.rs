@@ -36,8 +36,9 @@ pub struct FrameState {
 }
 
 pub struct DragCtx {
-    pub target: isize, // ドラッグ中のHWND生値
-    pub denied: bool,  // 取り込み不可(赤ハイライト)
+    pub target: isize,     // ドラッグ中のHWND生値
+    pub denied: bool,      // 取り込み不可(赤ハイライト)
+    pub from_locked: bool, // ロック中パネルの占有者(ドロップ時にスナップバック)
 }
 
 pub struct App {

@@ -90,8 +90,16 @@ fn on_drag_start(app_hwnd: HWND, target: HWND) {
         return;
     }
     let denied = is_elevated_window(target);
+    let id = target.0 as isize;
     APP.with(|a| {
-        a.borrow_mut().dragging = Some(DragCtx { target: target.0 as isize, denied });
+        let mut app = a.borrow_mut();
+        // ロック中パネルの占有者か。ドラッグ中はマウスが塞がりロック操作は
+        // 起こらないため、開始時の判定で確定してよい
+        let from_locked = app
+            .frames
+            .iter()
+            .any(|f| f.dock.panel_of(id).is_some_and(|p| f.dock.is_locked(p)));
+        app.dragging = Some(DragCtx { target: id, denied, from_locked });
     });
     // ドラッグ中のみポーリング(平常時のCPU負荷はゼロ)
     unsafe {
@@ -124,13 +132,17 @@ fn cursor_pos() -> POINT {
 }
 
 fn on_drag_tick() {
-    let (overlay, denied) = APP.with(|a| {
+    let (overlay, flags) = APP.with(|a| {
         let app = a.borrow();
-        (app.overlay, app.dragging.as_ref().map(|d| d.denied))
+        (app.overlay, app.dragging.as_ref().map(|d| (d.denied, d.from_locked)))
     });
-    let Some(denied) = denied else { return };
+    let Some((denied, from_locked)) = flags else { return };
     match hit_panel(cursor_pos()) {
-        Some((_, _, body)) => crate::overlay::show(overlay, body, denied),
+        Some((fi, pi, body)) => {
+            let dest_locked =
+                APP.with(|a| a.borrow().frames.get(fi).is_some_and(|f| f.dock.is_locked(pi)));
+            crate::overlay::show(overlay, body, denied || from_locked || dest_locked);
+        }
         None => crate::overlay::hide(overlay),
     }
 }
@@ -148,8 +160,20 @@ fn on_drag_end(app_hwnd: HWND, target: HWND) {
     }
 
     let id = ctx.target;
+    // 完全ロック: ロック中パネルの占有者はどこへドロップしても元のパネルへ戻す
+    if ctx.from_locked {
+        snap_back(id);
+        return;
+    }
     match hit_panel(cursor_pos()) {
         Some((fi, pi, _)) => {
+            // ロック中パネルへのドロップは無効。ドック済みなら元のパネルへ戻す
+            let dest_locked =
+                APP.with(|a| a.borrow().frames.get(fi).is_some_and(|f| f.dock.is_locked(pi)));
+            if dest_locked {
+                snap_back(id);
+                return;
+            }
             // フレームを跨ぐ移動に備え、いったんどのフレームからも外す
             let prev = undock_from_any_frame(id);
             let orig = prev.unwrap_or_else(|| window_rect(target).unwrap_or_default());
@@ -181,6 +205,17 @@ fn on_drag_end(app_hwnd: HWND, target: HWND) {
                 }
             }
         }
+    }
+}
+
+/// ドック済みウィンドウを所属パネルの位置へ戻す(ロック拒否時のスナップバック)。
+/// 未ドックなら何もしない(ドロップ地点に残る)
+fn snap_back(id: isize) {
+    let home = APP.with(|a| {
+        a.borrow().frames.iter().find(|f| f.dock.panel_of(id).is_some()).map(|f| f.hwnd)
+    });
+    if let Some(h) = home {
+        crate::frame::reflow(h);
     }
 }
 
