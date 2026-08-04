@@ -633,7 +633,9 @@ fn draw_frame(dc: HDC, client: Rect, f: &FrameState, theme: &Theme) {
                 draw_glyph(dc, r, g, theme.text_dim);
             }
             ButtonId::PanelLock(i) => {
-                // 空パネルでも表示(空パネルロック=予約席として機能)
+                if f.dock.occupant(i).is_none() {
+                    continue; // 空パネルにはボタンを出さない(ロックはドック中のみ)
+                }
                 if hovered {
                     fill(dc, r, theme.hover);
                 }
