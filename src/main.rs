@@ -1,3 +1,5 @@
+mod layout;
+
 #[cfg(windows)]
 fn main() {
     // 後続タスクでメッセージループを実装する
