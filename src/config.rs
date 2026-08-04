@@ -27,7 +27,7 @@ impl Default for FrameConfig {
 
 /// exe と同じフォルダの config.toml(ポータブル運用)
 pub fn config_path() -> PathBuf {
-    let mut p = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("window-panel-tool.exe"));
+    let mut p = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("winpanes.exe"));
     p.set_file_name("config.toml");
     p
 }

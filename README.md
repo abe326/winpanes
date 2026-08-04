@@ -1,8 +1,22 @@
-# Window Panel Tool
+# Winpanes
 
 Windows のウィンドウをターミナルのパネル分割のように整列させる軽量ツール。
-インストール不要。`window-panel-tool.exe` を好きな場所に置いて起動するだけ
-(設定は exe と同じフォルダの `config.toml` に保存されます)。
+
+*A lightweight window-tiling tool for Windows: dock any window into terminal-style panes.*
+
+## 特徴
+
+- ドラッグ&ドロップで任意のウィンドウをパネルへ取り込み
+- 分割プリセット: 4分割 / 縦2分割 / 横2分割
+- フレームの移動・リサイズにドック済みウィンドウがリアルタイム追従
+- パネル単位の最大化と、ツール自体の最大化
+- 複数フレーム対応(マルチモニタで各モニタに1枚など)
+- 単体 exe(約 500KB)・インストール不要・軽量常駐
+- 設定は exe と同じフォルダの `config.toml` に保存(ポータブル)
+
+## インストール
+
+インストールは不要です。`winpanes.exe` を好きな場所に置いて起動するだけ。
 
 ## 使い方
 
@@ -13,8 +27,28 @@ Windows のウィンドウをターミナルのパネル分割のように整列
 - ツールバー: 分割切替(4分割/縦2/横2)・フレーム最大化・閉じる
 - タスクトレイ: 新しいフレーム追加・終了
 
+## ソースからビルド
+
+Rust (stable) が必要です。
+
+```sh
+# Windows 上で
+cargo build --release
+
+# WSL/Linux からクロスビルドする場合
+rustup target add x86_64-pc-windows-gnu
+sudo apt install mingw-w64
+cargo build --release --target x86_64-pc-windows-gnu
+```
+
+ロジック部分のテストは Linux でもそのまま動きます: `cargo test`
+
 ## 既知の制約
 
 - 管理者権限で動くアプリのウィンドウは操作できません(ドラッグしても反応しません)。
   必要な場合は本ツール自体を管理者として実行してください
 - 最小サイズの大きいアプリはパネルからはみ出すことがあります
+
+## ライセンス
+
+[MIT](LICENSE)

@@ -27,7 +27,7 @@ pub fn add(app_hwnd: HWND) {
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_APP_TRAY;
         nid.hIcon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
-        let tip: Vec<u16> = "Window Panel Tool\0".encode_utf16().collect();
+        let tip: Vec<u16> = "Winpanes\0".encode_utf16().collect();
         nid.szTip[..tip.len()].copy_from_slice(&tip);
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
     }

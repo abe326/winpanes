@@ -100,7 +100,7 @@ pub fn create(cfg: &FrameConfig) -> HWND {
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             FRAME_CLASS,
-            w!("Window Panel"),
+            w!("Winpanes"),
             // 枠なし+リサイズ境界。タイトルバーは自前ツールバーで代替(仕様6)
             WS_POPUP | WS_THICKFRAME | WS_MINIMIZEBOX,
             cfg.x,
