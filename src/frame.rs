@@ -18,6 +18,7 @@ pub const FRAME_CLASS: PCWSTR = w!("WndPanelFrame");
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ButtonId {
     Preset(Preset),
+    ToolMin,
     ToolMax,
     ToolClose,
     PanelMax(usize),
@@ -197,9 +198,10 @@ pub fn button_rects(state: &FrameState) -> Vec<(ButtonId, Rect)> {
     let mut v = vec![
         (ButtonId::ToolClose, Rect { x: c.w - bw, y: 0, w: bw, h: tb }),
         (ButtonId::ToolMax, Rect { x: c.w - bw * 2, y: 0, w: bw, h: tb }),
+        (ButtonId::ToolMin, Rect { x: c.w - bw * 3, y: 0, w: bw, h: tb }),
     ];
     if state.dock.maximized_panel().is_some() {
-        v.push((ButtonId::PanelRestore, Rect { x: c.w - bw * 3, y: 0, w: bw, h: tb }));
+        v.push((ButtonId::PanelRestore, Rect { x: c.w - bw * 4, y: 0, w: bw, h: tb }));
     }
     for (i, p) in [Preset::Grid2x2, Preset::Cols2, Preset::Rows2].into_iter().enumerate() {
         v.push((
@@ -318,7 +320,18 @@ unsafe extern "system" fn frame_wndproc(
             reflow(hwnd);
             LRESULT(1)
         }
-        WM_SIZE | WM_MOVE => {
+        // 最小化はグループごと(タスクバーのトグル経由でも同じ挙動)。
+        // 復帰時は最小化されたままのドック済みを戻してから再配置する
+        WM_SIZE => {
+            if wparam.0 as u32 == SIZE_MINIMIZED {
+                minimize_docked(hwnd);
+            } else {
+                restore_docked(hwnd);
+                reflow(hwnd);
+            }
+            LRESULT(0)
+        }
+        WM_MOVE => {
             reflow(hwnd);
             LRESULT(0)
         }
@@ -403,6 +416,7 @@ fn hit_test(hwnd: HWND, lparam: LPARAM) -> LRESULT {
 const GLYPH_MAXIMIZE: u16 = 0xE922;
 const GLYPH_RESTORE: u16 = 0xE923;
 const GLYPH_CLOSE: u16 = 0xE8BB;
+const GLYPH_MINIMIZE: u16 = 0xE921;
 const GLYPH_LOCK: u16 = 0xE72E;
 const GLYPH_UNLOCK: u16 = 0xE785;
 
@@ -618,6 +632,15 @@ fn draw_frame(dc: HDC, client: Rect, f: &FrameState, theme: &Theme) {
                 let g = if f.maximized { GLYPH_RESTORE } else { GLYPH_MAXIMIZE };
                 draw_glyph(dc, r, g, theme.text);
             }
+            ButtonId::ToolMin => {
+                if hovered {
+                    fill(dc, r, theme.hover);
+                }
+                unsafe {
+                    SelectObject(dc, icon_font.into());
+                }
+                draw_glyph(dc, r, GLYPH_MINIMIZE, theme.text);
+            }
             ButtonId::PanelRestore => {
                 if hovered {
                     fill(dc, r, theme.hover);
@@ -699,6 +722,10 @@ fn on_click(hwnd: HWND, lparam: LPARAM) {
     match btn {
         Some(ButtonId::ToolClose) => close_frame(hwnd),
         Some(ButtonId::ToolMax) => toggle_tool_maximize(hwnd),
+        Some(ButtonId::ToolMin) => unsafe {
+            // グループの最小化は WM_SIZE(SIZE_MINIMIZED) 側で行う
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+        },
         Some(ButtonId::Preset(p)) => set_preset(hwnd, p),
         Some(ButtonId::PanelMax(i)) => toggle_panel_maximize(hwnd, i),
         Some(ButtonId::PanelRestore) => {
@@ -877,6 +904,27 @@ fn docked_ids(hwnd: HWND) -> Vec<isize> {
         (0..f.dock.panel_count()).filter_map(|i| f.dock.occupant(i)).collect()
     })
     .unwrap_or_default()
+}
+
+/// フレームの最小化に合わせてドック済みウィンドウもアクティブ化せずにしまう
+fn minimize_docked(hwnd: HWND) {
+    for id in docked_ids(hwnd) {
+        unsafe {
+            let _ = ShowWindow(HWND(id as *mut _), SW_SHOWMINNOACTIVE);
+        }
+    }
+}
+
+/// フレーム復帰時: 最小化されたままのドック済みをアクティブ化せずに戻す
+fn restore_docked(hwnd: HWND) {
+    for id in docked_ids(hwnd) {
+        let h = HWND(id as *mut _);
+        unsafe {
+            if IsIconic(h).as_bool() {
+                let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+            }
+        }
+    }
 }
 
 /// このフレームのドック済みウィンドウのうち、Zオーダーが最も背面のものを返す。
