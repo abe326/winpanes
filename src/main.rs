@@ -41,6 +41,15 @@ unsafe extern "system" fn app_wndproc(
         }
         return LRESULT(0);
     }
+    if msg == appmsg::WM_APP_QUIT {
+        // 最後のフレームが閉じた。設定保存・ウィンドウ復元は close_frame 側で完了済み
+        use windows::Win32::UI::WindowsAndMessaging::PostQuitMessage;
+        tray::remove(hwnd);
+        unsafe {
+            PostQuitMessage(0);
+        }
+        return LRESULT(0);
+    }
     if msg == WM_COMMAND {
         on_tray_command(hwnd, wparam.0 & 0xFFFF);
         return LRESULT(0);

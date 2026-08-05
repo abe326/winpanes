@@ -952,6 +952,15 @@ fn bottom_docked(hwnd: HWND) -> Option<HWND> {
 
 /// 仕様6: 閉じるはそのフレームのみ。ドック済みは元の位置・サイズへ復元
 pub fn close_frame(hwnd: HWND) {
+    // 最後のフレームなら閉じる=アプリ終了。位置は畳む前に保存して次回起動で復元する
+    let is_last = APP.with(|a| {
+        let app = a.borrow();
+        app.frames.len() == 1 && app.frames.first().map(|f| f.hwnd) == Some(hwnd)
+    });
+    if is_last {
+        request_save();
+        APP.with(|a| a.borrow_mut().suppress_save = true);
+    }
     let mut restored = Vec::new();
     with_frame(hwnd, |f| restored = f.dock.drain_all());
     for d in restored {
@@ -964,5 +973,13 @@ pub fn close_frame(hwnd: HWND) {
         let _ = DestroyWindow(hwnd);
     }
     request_save();
-    // 全フレームを閉じてもアプリは常駐継続。終了はトレイメニューから
+    if is_last {
+        // タスクを完全終了する(トレイ常駐は残さない)。トレイ削除と
+        // PostQuitMessage はアプリウィンドウ側(WM_APP_QUIT)で行う
+        let app_hwnd = APP.with(|a| a.borrow().app_hwnd);
+        unsafe {
+            let _ =
+                PostMessageW(Some(app_hwnd), crate::appmsg::WM_APP_QUIT, WPARAM(0), LPARAM(0));
+        }
+    }
 }
