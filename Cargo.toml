@@ -1,6 +1,6 @@
 [package]
 name = "winpanes"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Dock any window into terminal-style panes — a lightweight window-tiling tool for Windows"
 license = "MIT"

@@ -9,16 +9,22 @@ permissions:
 
 jobs:
   release:
-    name: Build & Publish winpanes.exe
+    name: Build & Publish winpanes (zip)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test --release
       - run: cargo build --release
+      # 配布ルール: exe は生のまま添付せず、必ず zip に固めてリリースする
+      - name: Package zip
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: Compress-Archive -Path target/release/winpanes.exe -DestinationPath "winpanes-$env:TAG-windows-x86_64.zip"
       - name: Create GitHub Release
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" target/release/winpanes.exe --title "winpanes $TAG" --generate-notes
+        run: gh release create "$TAG" "winpanes-$TAG-windows-x86_64.zip" --title "winpanes $TAG" --generate-notes
