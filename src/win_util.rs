@@ -1,16 +1,49 @@
 #![cfg(windows)]
 use crate::layout::Rect;
+use std::cell::RefCell;
 use windows::core::w;
 use windows::core::BOOL;
 use windows::Win32::Foundation::{CloseHandle, COLORREF, HANDLE, HWND, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetColorizationColor, DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
 use windows::Win32::System::Threading::{
     OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::Shell::{ITaskbarList, TaskbarList};
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+thread_local! {
+    /// UIスレッド専用の ITaskbarList(初回使用時に生成)
+    static TASKBAR: RefCell<Option<ITaskbarList>> = const { RefCell::new(None) };
+}
+
+/// ドック中ウィンドウのタスクバーボタンを隠す/戻す。
+/// ITaskbarList はボタンの表示だけを制御し、対象ウィンドウのスタイルには
+/// 触れないため他アプリへの副作用がない(Alt+Tab には残る)
+pub fn set_taskbar_visible(hwnd: HWND, visible: bool) {
+    TASKBAR.with(|t| {
+        let mut slot = t.borrow_mut();
+        if slot.is_none() {
+            unsafe {
+                if let Ok(list) =
+                    CoCreateInstance::<_, ITaskbarList>(&TaskbarList, None, CLSCTX_INPROC_SERVER)
+                {
+                    if list.HrInit().is_ok() {
+                        *slot = Some(list);
+                    }
+                }
+            }
+        }
+        if let Some(list) = slot.as_ref() {
+            unsafe {
+                let _ = if visible { list.AddTab(hwnd) } else { list.DeleteTab(hwnd) };
+            }
+        }
+    });
+}
 
 pub fn to_rect(r: RECT) -> Rect {
     Rect { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top }

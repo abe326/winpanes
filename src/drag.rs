@@ -189,9 +189,13 @@ fn on_drag_end(app_hwnd: HWND, target: HWND) {
                     }
                 }
             });
+            // ドック中はタスクバーボタンを隠す(解除時に戻す)
+            set_taskbar_visible(target, false);
             // 押し出された先住ウィンドウは元のサイズへ復元(仕様4)
             if let Some(d) = freed {
-                move_window_to(HWND(d.id as *mut _), d.orig);
+                let freed_hwnd = HWND(d.id as *mut _);
+                set_taskbar_visible(freed_hwnd, true);
+                move_window_to(freed_hwnd, d.orig);
             }
             if let Some(h) = frame_hwnd {
                 crate::frame::reflow(h);
@@ -200,6 +204,7 @@ fn on_drag_end(app_hwnd: HWND, target: HWND) {
         None => {
             // フレーム外で解除: サイズは元に戻し、位置はドロップ地点のまま(仕様4)
             if let Some(orig) = undock_from_any_frame(id) {
+                set_taskbar_visible(target, true);
                 if let Some(cur) = window_rect(target) {
                     move_window_to(target, Rect { x: cur.x, y: cur.y, w: orig.w, h: orig.h });
                 }

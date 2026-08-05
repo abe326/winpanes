@@ -107,6 +107,9 @@ fn main() {
     frame::set_save_hook(save_config);
 
     unsafe {
+        // ITaskbarList(ドック中ウィンドウのタスクバーボタン非表示)用
+        use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         let wc = WNDCLASSW {
             lpfnWndProc: Some(app_wndproc),
             hInstance: GetModuleHandleW(None).unwrap().into(),

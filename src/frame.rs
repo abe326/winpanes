@@ -783,7 +783,9 @@ pub fn set_preset(hwnd: HWND, p: Preset) {
     });
     // あふれたウィンドウは元のサイズに復元(仕様4)
     for d in released {
-        move_window_to(HWND(d.id as *mut _), d.orig);
+        let h = HWND(d.id as *mut _);
+        set_taskbar_visible(h, true);
+        move_window_to(h, d.orig);
     }
     reflow(hwnd);
     request_save();
@@ -829,6 +831,9 @@ pub fn reflow(hwnd: HWND) {
                     let _ = f.dock.undock(*id);
                 }
             });
+            for id in &failed {
+                set_taskbar_visible(HWND(*id as *mut _), true);
+            }
         }
     }
     unsafe {
@@ -902,7 +907,9 @@ pub fn close_frame(hwnd: HWND) {
     let mut restored = Vec::new();
     with_frame(hwnd, |f| restored = f.dock.drain_all());
     for d in restored {
-        move_window_to(HWND(d.id as *mut _), d.orig);
+        let h = HWND(d.id as *mut _);
+        set_taskbar_visible(h, true);
+        move_window_to(h, d.orig);
     }
     APP.with(|a| a.borrow_mut().frames.retain(|f| f.hwnd != hwnd));
     unsafe {
