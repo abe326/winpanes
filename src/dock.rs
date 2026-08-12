@@ -149,6 +149,22 @@ impl<Id: Copy + Eq> DockManager<Id> {
         self.slots.iter_mut().filter_map(|s| s.take()).collect()
     }
 
+    /// グループを前面へ引き上げる際の順序。後に挙げたものほど前面になるため、
+    /// 最大化中のパネルの占有者は末尾(=最前面)に置く(仕様4: 他パネルは背後に残す)
+    pub fn raise_order(&self) -> Vec<Id> {
+        let mut ids: Vec<Id> = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.maximized != Some(*i))
+            .filter_map(|(_, s)| s.map(|d| d.id))
+            .collect();
+        if let Some(id) = self.maximized.and_then(|p| self.occupant(p)) {
+            ids.push(id);
+        }
+        ids
+    }
+
     /// 各ドック済みウィンドウの目標矩形。最大化パネルは frame_body 全体(仕様4)
     pub fn target_rects(&self, panels: &[PanelArea], frame_body: Rect) -> Vec<(Id, Rect)> {
         self.slots
@@ -360,6 +376,28 @@ mod tests {
         assert!(m.is_locked(0));
         assert!(!m.toggle_lock(0));
         assert!(!m.is_locked(0));
+    }
+
+    #[test]
+    fn raise_order_is_panel_order_without_maximize() {
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.dock(20u32, 1, R2);
+        m.dock(30u32, 3, R1);
+        assert_eq!(m.raise_order(), vec![10, 20, 30]);
+    }
+
+    #[test]
+    fn raise_order_puts_maximized_window_last() {
+        // 後に挙げたものほど前面になるため、最大化中のウィンドウは末尾であること
+        let mut m = DockManager::new(4);
+        m.dock(10u32, 0, R1);
+        m.dock(20u32, 1, R2);
+        m.dock(30u32, 3, R1);
+        m.toggle_maximize(0);
+        assert_eq!(m.raise_order(), vec![20, 30, 10]);
+        m.toggle_maximize(0); // 解除でパネル順に戻る
+        assert_eq!(m.raise_order(), vec![10, 20, 30]);
     }
 
     #[test]

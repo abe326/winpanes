@@ -1,7 +1,7 @@
 #![cfg(windows)]
 use crate::config::FrameConfig;
 use crate::dock::DockManager;
-use crate::layout::{panel_areas, PanelArea, Preset, Rect, HEADER_H, TOOLBAR_H};
+use crate::layout::{panel_areas, restore_drag_rect, PanelArea, Preset, Rect, HEADER_H, TOOLBAR_H};
 use crate::win_util::*;
 use std::cell::RefCell;
 use windows::core::{w, PCWSTR};
@@ -9,7 +9,9 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT, VK_LBUTTON,
+};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const FRAME_CLASS: PCWSTR = w!("WndPanelFrame");
@@ -35,6 +37,8 @@ pub struct FrameState {
     pub dock: DockManager<isize>, // HWND生値(isize)をIDに使う
     pub restore_rect: Rect,       // 非最大化時のウィンドウ矩形(config保存にも使う)
     pub maximized: bool,
+    /// 最大化解除ドラッグ後、WM_EXITSIZEMOVE で移動ループを掴み直すまで true
+    pub pending_regrab: bool,
     pub hover: Option<ButtonId>,
 }
 
@@ -87,15 +91,19 @@ pub fn request_save() {
 
 pub fn register_class() {
     unsafe {
-        let wc = WNDCLASSW {
+        let wc = WNDCLASSEXW {
+            cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             style: CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
             lpfnWndProc: Some(frame_wndproc),
             hInstance: GetModuleHandleW(None).unwrap().into(),
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+            // Alt+Tab・タスクバー用の大アイコンと、.ico 内の小サイズを活かす小アイコン
+            hIcon: load_app_icon(None).unwrap_or_default(),
+            hIconSm: load_app_icon(Some(GetSystemMetrics(SM_CXSMICON))).unwrap_or_default(),
             lpszClassName: FRAME_CLASS,
             ..Default::default()
         };
-        RegisterClassW(&wc);
+        RegisterClassExW(&wc);
     }
 }
 
@@ -124,6 +132,7 @@ pub fn create(cfg: &FrameConfig) -> HWND {
                 dock: DockManager::new(cfg.preset.panel_count()),
                 restore_rect: Rect { x: cfg.x, y: cfg.y, w: cfg.width, h: cfg.height },
                 maximized: false,
+                pending_regrab: false,
                 hover: None,
             });
         });
@@ -315,8 +324,14 @@ unsafe extern "system" fn frame_wndproc(
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
-        // 移動・リサイズ中のリアルタイム追従(仕様4)
-        WM_MOVING | WM_SIZING => {
+        // 移動中のリアルタイム追従(仕様4)。最大化中はWindows標準の
+        // 「ドラッグで元サイズへ復元」を再現する
+        WM_MOVING => {
+            on_moving(hwnd, lparam);
+            LRESULT(1)
+        }
+        // リサイズ中のリアルタイム追従(仕様4)
+        WM_SIZING => {
             reflow(hwnd);
             LRESULT(1)
         }
@@ -336,7 +351,9 @@ unsafe extern "system" fn frame_wndproc(
             LRESULT(0)
         }
         WM_EXITSIZEMOVE => {
+            let mut regrab = false;
             with_frame(hwnd, |f| {
+                regrab = std::mem::take(&mut f.pending_regrab);
                 if !f.maximized {
                     if let Some(r) = window_rect(hwnd) {
                         f.restore_rect = r;
@@ -344,6 +361,16 @@ unsafe extern "system" fn frame_wndproc(
                 }
             });
             request_save();
+            // 最大化解除ドラッグの掴み直し。旧移動ループはここで終了が保証されるため、
+            // ボタンが押されたままなら復元後の矩形で新しい移動ループを開始する
+            if regrab && unsafe { GetKeyState(VK_LBUTTON.0 as i32) } < 0 {
+                let mut pt = POINT::default();
+                unsafe {
+                    let _ = GetCursorPos(&mut pt);
+                    let lp = LPARAM((((pt.y as isize) & 0xFFFF) << 16) | ((pt.x as isize) & 0xFFFF));
+                    let _ = PostMessageW(Some(hwnd), WM_NCLBUTTONDOWN, WPARAM(HTCAPTION as usize), lp);
+                }
+            }
             LRESULT(0)
         }
         WM_DPICHANGED => {
@@ -740,6 +767,66 @@ fn on_click(hwnd: HWND, lparam: LPARAM) {
 
 // ---------------------------------------------------------------- 操作
 
+/// 移動中の処理。通常時はドック済みの追従のみ。最大化中はWindows標準に合わせ、
+/// ドラッグ閾値未満では動かさず、閾値を超えたら元サイズへ復元して掴み直す
+fn on_moving(hwnd: HWND, lparam: LPARAM) {
+    let (maximized, regrab) =
+        with_frame_ret(hwnd, |f| (f.maximized, f.pending_regrab)).unwrap_or((false, false));
+    if !maximized && !regrab {
+        reflow(hwnd);
+        return;
+    }
+    let Some(cur) = window_rect(hwnd) else { return };
+    let dest = if regrab {
+        // 掴み直し待ち: 旧移動ループの提案は無視して現在位置にピン留めする
+        cur
+    } else {
+        let proposed = to_rect(unsafe { *(lparam.0 as *const RECT) });
+        let (dx, dy) = (proposed.x - cur.x, proposed.y - cur.y);
+        let (tx, ty) = unsafe { (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG)) };
+        if dx.abs() < tx && dy.abs() < ty {
+            // 閾値未満のぶれでは最大化ウィンドウを動かさない(Windows標準)
+            cur
+        } else {
+            restore_from_drag(hwnd, cur)
+        }
+    };
+    // 提案矩形への書き込みは再入し得る呼び出しが終わってから行う(&mut を跨いで保持しない)
+    unsafe { *(lparam.0 as *mut RECT) = to_win_rect(dest) };
+}
+
+/// 最大化を解除して復元サイズをカーソル下へ比例配置する。移動ループの掴み直しは
+/// 旧ループの終了が保証される WM_EXITSIZEMOVE 側で行う(モーダルループの入れ子を避ける)。
+/// 返り値は復元後の矩形(WM_MOVING の提案矩形にも反映させる)。
+/// ドック済みの追従は SetWindowPos が送る WM_SIZE 経由の reflow に任せ、
+/// 保存も WM_EXITSIZEMOVE に任せる(ここでは行わない)
+fn restore_from_drag(hwnd: HWND, cur: Rect) -> Rect {
+    let r = with_frame_ret(hwnd, |f| f.restore_rect).unwrap_or(cur);
+    let mut pt = POINT::default();
+    unsafe {
+        let _ = GetCursorPos(&mut pt);
+    }
+    let dest = restore_drag_rect(cur, (r.w, r.h), pt.x, pt.y, dpi_scale(hwnd, TOOLBAR_H));
+    with_frame(hwnd, |f| {
+        f.maximized = false;
+        f.pending_regrab = true;
+    });
+    unsafe {
+        // 現在の移動ループを終える(キャプチャ喪失で確定終了し WM_EXITSIZEMOVE が届く)
+        let _ = ReleaseCapture();
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            dest.x,
+            dest.y,
+            dest.w,
+            dest.h,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+    dest
+}
+
 /// 仕様4: ツール最大化 = モニタ作業領域全体(タスクバーは覆わない)
 pub fn toggle_tool_maximize(hwnd: HWND) {
     unsafe {
@@ -870,10 +957,11 @@ pub fn reflow(hwnd: HWND) {
 
 /// 仕様4: フレームとドック済みウィンドウをグループとして手前へ。フレームは常に最背面。
 /// 先にドック済みを前面へ出し、フレーム自身の引き上げは WM_WINDOWPOSCHANGING の
-/// 書き換えによって「ドック済みの直下」に収まる
+/// 書き換えによって「ドック済みの直下」に収まる。
+/// 順序は raise_order に従う(最大化中のウィンドウがグループ内最前面)
 pub fn raise_group(hwnd: HWND) {
     APP.with(|a| a.borrow_mut().last_active = hwnd);
-    let ids = docked_ids(hwnd);
+    let ids = with_frame_ret(hwnd, |f| f.dock.raise_order()).unwrap_or_default();
     unsafe {
         for id in ids {
             let _ = SetWindowPos(

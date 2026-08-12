@@ -1,9 +1,10 @@
 #![cfg(windows)]
 use crate::layout::Rect;
 use std::cell::RefCell;
-use windows::core::w;
+use windows::core::{w, PCWSTR};
 use windows::core::BOOL;
-use windows::Win32::Foundation::{CloseHandle, COLORREF, HANDLE, HWND, RECT};
+use windows::Win32::Foundation::{CloseHandle, COLORREF, HANDLE, HINSTANCE, HWND, RECT};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::Graphics::Dwm::{DwmGetColorizationColor, DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
@@ -43,6 +44,21 @@ pub fn set_taskbar_visible(hwnd: HWND, visible: bool) {
             }
         }
     });
+}
+
+/// exe 埋め込みアイコン(build.rs の set_icon が ID=1 で埋め込む)を読む。
+/// size=None は既定サイズ(32px相当)。LR_SHARED の共有ハンドルなので解放不要
+pub fn load_app_icon(size: Option<i32>) -> Option<HICON> {
+    unsafe {
+        let hinst: HINSTANCE = GetModuleHandleW(None).ok()?.into();
+        let (cx, cy, flags) = match size {
+            Some(px) => (px, px, LR_SHARED),
+            None => (0, 0, LR_DEFAULTSIZE | LR_SHARED),
+        };
+        LoadImageW(Some(hinst), PCWSTR(1 as *const u16), IMAGE_ICON, cx, cy, flags)
+            .ok()
+            .map(|h| HICON(h.0))
+    }
 }
 
 pub fn to_rect(r: RECT) -> Rect {

@@ -70,6 +70,18 @@ pub fn panel_areas(preset: Preset, area: Rect, header_h: i32) -> Vec<PanelArea> 
         .collect()
 }
 
+/// 最大化中ドラッグで復元する際の配置先(Windows標準の復元ドラッグ相当)。
+/// カーソルの水平位置の比率を維持し、縦方向はカーソルがツールバー帯上に残る位置に置く。
+/// `cur`: 現在(最大化中)の矩形 / `size`: 復元後の(幅, 高さ) /
+/// `cx, cy`: カーソル位置 / `toolbar_h`: 物理pxのツールバー高さ
+pub fn restore_drag_rect(cur: Rect, size: (i32, i32), cx: i32, cy: i32, toolbar_h: i32) -> Rect {
+    let (w, h) = size;
+    let fx = if cur.w > 0 { ((cx - cur.x) as f64 / cur.w as f64).clamp(0.0, 1.0) } else { 0.5 };
+    let x = cx - (w as f64 * fx).round() as i32;
+    let y = cy - (cy - cur.y).clamp(0, toolbar_h);
+    Rect { x, y, w, h }
+}
+
 /// n等分し、割り切れない余りは最後のセルに寄せる
 fn split_axis(start: i32, len: i32, n: i32) -> Vec<(i32, i32)> {
     let base = len / n;
@@ -131,6 +143,40 @@ mod tests {
         let p = panel_areas(Preset::Cols2, Rect { x: 0, y: 0, w: 100, h: 20 }, 28);
         assert_eq!(p[0].body.h, 0);
         assert_eq!(p[0].header.h, 20); // ヘッダーはセル高さでクリップ
+    }
+
+    #[test]
+    fn restore_drag_keeps_cursor_ratio_horizontally() {
+        // 最大化矩形 2000px 幅の中央 (x=1000) を掴んだら、復元後 800px 幅でも中央を掴む
+        let cur = Rect { x: 0, y: 0, w: 2000, h: 1000 };
+        let r = restore_drag_rect(cur, (800, 600), 1000, 16, 32);
+        assert_eq!(r, Rect { x: 600, y: 0, w: 800, h: 600 });
+    }
+
+    #[test]
+    fn restore_drag_clamps_to_edges() {
+        let cur = Rect { x: 0, y: 0, w: 2000, h: 1000 };
+        // 左端: カーソルが左端に残る
+        assert_eq!(restore_drag_rect(cur, (800, 600), 0, 10, 32).x, 0);
+        // 右端: カーソルが右端に残る
+        assert_eq!(restore_drag_rect(cur, (800, 600), 2000, 10, 32).x, 1200);
+        // 範囲外(モニタ跨ぎ等)でも比率は 0..1 にクランプ
+        assert_eq!(restore_drag_rect(cur, (800, 600), -50, 10, 32).x, -50);
+    }
+
+    #[test]
+    fn restore_drag_keeps_cursor_on_toolbar_vertically() {
+        // 作業領域が y=100 から始まるモニタ: カーソルのY方向オフセットを維持
+        let cur = Rect { x: 0, y: 100, w: 2000, h: 1000 };
+        assert_eq!(restore_drag_rect(cur, (800, 600), 1000, 120, 32).y, 100);
+        // オフセットがツールバー高を超える場合はツールバー帯上にクランプ
+        assert_eq!(restore_drag_rect(cur, (800, 600), 1000, 200, 32).y, 168);
+    }
+
+    #[test]
+    fn restore_drag_degenerate_width_centers() {
+        let cur = Rect { x: 0, y: 0, w: 0, h: 0 };
+        assert_eq!(restore_drag_rect(cur, (800, 600), 500, 0, 32).x, 100);
     }
 
     #[test]

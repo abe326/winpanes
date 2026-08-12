@@ -1,5 +1,6 @@
 #![cfg(windows)]
 use crate::appmsg::WM_APP_TRAY;
+use crate::win_util::load_app_icon;
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::UI::Shell::{
@@ -26,7 +27,9 @@ pub fn add(app_hwnd: HWND) {
         let mut nid = base_icon_data(app_hwnd);
         nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
         nid.uCallbackMessage = WM_APP_TRAY;
-        nid.hIcon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+        // exe 埋め込みアイコンをトレイ向けの小サイズで読む。失敗時はシステム既定
+        nid.hIcon = load_app_icon(Some(GetSystemMetrics(SM_CXSMICON)))
+            .unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default());
         let tip: Vec<u16> = "Winpanes\0".encode_utf16().collect();
         nid.szTip[..tip.len()].copy_from_slice(&tip);
         let _ = Shell_NotifyIconW(NIM_ADD, &nid);
