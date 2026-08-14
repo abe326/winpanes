@@ -273,6 +273,12 @@ unsafe extern "system" fn frame_wndproc(
         WM_NCHITTEST => hit_test(hwnd, lparam),
         // 非クライアント領域なし(枠・キャプションは自前描画)
         WM_NCCALCSIZE if wparam.0 != 0 => LRESULT(0),
+        // 既定処理は WM_NCCALCSIZE と無関係にスタイル(WS_THICKFRAME)基準で
+        // クラシックな太枠をウィンドウDCへ直接描くため、非クライアント描画を抑止する
+        // (アクティブ化の切り替わり時に白い太枠が縁に残る原因)
+        WM_NCPAINT => LRESULT(0),
+        // lparam=-1 は「非クライアント領域を再描画しない」の文書化された指定
+        WM_NCACTIVATE => unsafe { DefWindowProcW(hwnd, msg, wparam, LPARAM(-1)) },
         WM_PAINT => {
             paint(hwnd);
             LRESULT(0)
