@@ -141,7 +141,15 @@ fn on_drag_tick() {
         Some((fi, pi, body)) => {
             let dest_locked =
                 APP.with(|a| a.borrow().frames.get(fi).is_some_and(|f| f.dock.is_locked(pi)));
-            crate::overlay::show(overlay, body, denied || from_locked || dest_locked);
+            if denied {
+                crate::overlay::show(overlay, body, true);
+            } else if from_locked || dest_locked {
+                // ロック起因の無効ドロップは無表示(ドロップしても何も起きないため、
+                // 赤ハイライトも出さない)
+                crate::overlay::hide(overlay);
+            } else {
+                crate::overlay::show(overlay, body, false);
+            }
         }
         None => crate::overlay::hide(overlay),
     }
